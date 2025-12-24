@@ -1,0 +1,201 @@
+name: 🧪 Test ZEUSUS Toolkit
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [14.x, 16.x, 18.x, 20.x]
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🔧 Setup Node.js ${{ matrix.node-version }}
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ matrix.node-version }}
+        cache: 'npm'
+
+    - name: 📦 Install dependencies
+      run: |
+        # No dependencies needed, but validate package.json
+        npm install --dry-run
+
+    - name: 🧪 Run tests
+      run: |
+        chmod +x test.sh
+        ./test.sh
+
+    - name: ✅ Validate parser functionality
+      run: |
+        # Test help output
+        node lighthouse-parser.cjs --help > /dev/null
+
+        # Test version info
+        node lighthouse-parser.cjs --version > /dev/null || echo "Version check optional"
+
+    - name: 📊 Test JSON structure validation
+      run: |
+        # Create a minimal valid Lighthouse JSON for testing
+        cat > test-lighthouse.json << 'EOF'
+        {
+          "lighthouseVersion": "9.0.0",
+          "requestedUrl": "https://example.com",
+          "finalUrl": "https://example.com",
+          "runWarnings": [],
+          "audits": {
+            "first-contentful-paint": {
+              "id": "first-contentful-paint",
+              "title": "First Contentful Paint",
+              "description": "First Contentful Paint marks the time at which the first text or image is painted.",
+              "score": 1,
+              "scoreDisplayMode": "numeric",
+              "displayValue": "500 ms",
+              "numericValue": 500
+            }
+          },
+          "categories": {
+            "performance": {
+              "id": "performance",
+              "title": "Performance",
+              "score": 0.95,
+              "auditRefs": [
+                {
+                  "id": "first-contentful-paint",
+                  "weight": 10,
+                  "group": "metrics"
+                }
+              ]
+            }
+          }
+        }
+        EOF
+
+        # Test parser with minimal JSON
+        node lighthouse-parser.cjs test-lighthouse.json > test-output.txt
+        echo "✅ Parser executed successfully"
+
+        # Clean up
+        rm test-lighthouse.json test-output.txt
+
+    - name: 📋 Lint and validate code
+      run: |
+        # Check for syntax errors
+        node -c lighthouse-parser.cjs
+        node -c lighthouse-parser.js
+        echo "✅ Syntax validation passed"
+
+    - name: 📖 Validate documentation
+      run: |
+        # Check if README exists and has content
+        [ -f README.md ] && [ -s README.md ] || (echo "❌ README.md missing or empty" && exit 1)
+        [ -f LIGHTHOUSE-PARSER-README.md ] && [ -s LIGHTHOUSE-PARSER-README.md ] || (echo "❌ LIGHTHOUSE-PARSER-README.md missing or empty" && exit 1)
+        echo "✅ Documentation validation passed"
+
+  validate-package:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 📦 Validate package.json
+      run: |
+        # Check package.json exists and is valid JSON
+        cat package.json | jq . > /dev/null || (echo "❌ Invalid package.json" && exit 1)
+
+        # Validate required fields
+        jq -e '.name' package.json > /dev/null || (echo "❌ Missing name in package.json" && exit 1)
+        jq -e '.version' package.json > /dev/null || (echo "❌ Missing version in package.json" && exit 1)
+        jq -e '.main' package.json > /dev/null || (echo "❌ Missing main in package.json" && exit 1)
+
+        echo "✅ Package.json validation passed"
+
+  release:
+    needs: [test, validate-package]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
+
+    - name: 🏷️ Generate version tag
+      run: |
+        VERSION=$(node -p "require('./package.json').version")
+        echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+    - name: 📦 Create release archive
+      run: |
+        # Create release directory
+        mkdir -p release
+        cp -r . release/
+        cd release
+
+        # Remove unnecessary files
+        rm -rf node_modules .git .github
+
+        # Create tar archive
+        tar -czf ../zeusus-toolkit-${VERSION}.tar.gz .
+
+        cd ..
+        ls -la *.tar.gz
+
+    - name: 🚀 Create GitHub Release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: v${{ env.VERSION }}
+        release_name: ZEUSUS Toolkit v${{ env.VERSION }}
+        body: |
+          ## 🚀 ZEUSUS Lighthouse Toolkit v${{ env.VERSION }}
+
+          ### ✨ What's New
+          - Complete Lighthouse parser with 150+ audits support
+          - Advanced analysis with prioritization
+          - Multiple output formats (console, markdown, JSON)
+          - CI/CD integration ready
+          - Comprehensive documentation
+
+          ### 📦 Installation
+          ```bash
+          npm install zeusus-lighthouse-toolkit
+          # or
+          git clone https://github.com/bivex/zeusus.git
+          ```
+
+          ### 🚀 Quick Start
+          ```bash
+          node lighthouse-parser.cjs report.json
+          node lighthouse-parser.cjs report.json --markdown --output analysis.md
+          ```
+
+          ### 📊 Features
+          - Performance, Accessibility, SEO, Best Practices, PWA analysis
+          - Smart prioritization and recommendations
+          - CI/CD pipeline integration
+          - Multiple output formats
+
+          ---
+          **Full documentation:** [README.md](https://github.com/bivex/zeusus/blob/main/README.md)
+        draft: false
+        prerelease: false
+
+    - name: ⬆️ Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ./zeusus-toolkit-${{ env.VERSION }}.tar.gz
+        asset_name: zeusus-toolkit-${{ env.VERSION }}.tar.gz
+        asset_content_type: application/gzip
