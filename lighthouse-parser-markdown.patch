@@ -1,0 +1,295 @@
+From 68adf7f44a0a1503f4fa2e60e92a3fca86052059 Mon Sep 17 00:00:00 2001
+From: bivex <209128140+bivex@users.noreply.github.com>
+Date: Wed, 24 Dec 2025 06:06:35 +0200
+Subject: [PATCH] feat: Add Markdown output to Lighthouse Parser
+
+- Add generateMarkdownReport() method for structured Markdown reports
+- CLI support for --markdown flag and --output option
+- Comprehensive report with Core Web Vitals, errors, optimizations
+- Priority-based recommendations section
+- File output support with directory creation
+---
+ lighthouse-parser.cjs | 243 +++++++++++++++++++++++++++++++++++++++++-
+ 1 file changed, 239 insertions(+), 4 deletions(-)
+
+diff --git a/lighthouse-parser.cjs b/lighthouse-parser.cjs
+index a1a5107fb..1a630bc04 100644
+--- a/lighthouse-parser.cjs
++++ b/lighthouse-parser.cjs
+@@ -1,4 +1,18 @@
+ #!/usr/bin/env node
++/**
++ * Copyright (c) 2025 Bivex
++ *
++ * Author: Bivex
++ * Available for contact via email: support@b-b.top
++ * For up-to-date contact information:
++ * https://github.com/bivex
++ *
++ * Created: 2025-12-24T04:03:36
++ * Last Updated: 2025-12-24T04:05:38
++ *
++ * Licensed under the MIT License.
++ * Commercial licensing available upon request.
++ */
+ 
+ /**
+  * Lighthouse JSON Parser - извлекает самые важные данные
+@@ -248,7 +262,7 @@ class LighthouseParser {
+     };
+   }
+ 
+-  // Основной метод анализа
++  // Основной метод анализа с выводом в консоль
+   analyze() {
+     console.log('🔍 Lighthouse Parser - анализ отчета\n');
+ 
+@@ -343,6 +357,194 @@ class LighthouseParser {
+ 
+     console.log('✅ Анализ завершен!');
+   }
++
++  // Метод для генерации Markdown отчета
++  generateMarkdownReport() {
++    if (!this.loadReport()) {
++      return '# ❌ Ошибка загрузки отчета\n\nНе удалось загрузить Lighthouse отчет.';
++    }
++
++    // Загружаем дополнительные данные
++    this.loadDevToolsLog();
++    this.loadTraceData();
++
++    let markdown = [];
++
++    // Header
++    markdown.push('# 📊 Lighthouse Parser Report');
++    markdown.push('');
++    markdown.push(`**URL:** ${this.report.finalDisplayedUrl || 'Unknown'}`);
++    markdown.push(`**Date:** ${new Date(this.report.fetchTime || Date.now()).toLocaleString()}`);
++    markdown.push(`**Lighthouse Version:** ${this.report.lighthouseVersion || 'Unknown'}`);
++    markdown.push('');
++
++    // Core Web Vitals
++    const coreWebVitals = this.getCoreWebVitals();
++    if (coreWebVitals) {
++      markdown.push('## 📊 Core Web Vitals');
++      markdown.push('');
++      markdown.push('| Metric | Value | Score | Status |');
++      markdown.push('|--------|-------|-------|--------|');
++
++      Object.entries(coreWebVitals).forEach(([name, data]) => {
++        const status = data.status === 'good' ? '🟢 Good' :
++                      data.status === 'poor' ? '🔴 Poor' : '🟡 Needs Work';
++        markdown.push(`| ${name} | ${data.value}${data.unit} | ${Math.round(data.score * 100)}% | ${status} |`);
++      });
++      markdown.push('');
++    }
++
++    // Critical Errors
++    const criticalErrors = this.getCriticalErrors();
++    if (criticalErrors) {
++      const totalErrors = criticalErrors.console.length + criticalErrors.network.length + criticalErrors.inspector.length;
++
++      if (totalErrors > 0) {
++        markdown.push('## 🚨 Critical Errors');
++        markdown.push('');
++        markdown.push(`**Total Errors:** ${totalErrors}`);
++        markdown.push('');
++
++        if (criticalErrors.console.length > 0) {
++          markdown.push('### Console Errors');
++          markdown.push('');
++          criticalErrors.console.slice(0, 5).forEach(err => {
++            markdown.push(`- **${err.description}**`);
++            if (err.url) markdown.push(`  - URL: ${err.url}`);
++            if (err.line) markdown.push(`  - Line: ${err.line}`);
++          });
++          markdown.push('');
++        }
++
++        if (criticalErrors.network.length > 0) {
++          markdown.push('### Network Errors');
++          markdown.push('');
++          criticalErrors.network.slice(0, 5).forEach(err => {
++            markdown.push(`- **${err.status}** ${err.url}`);
++          });
++          markdown.push('');
++        }
++
++        if (criticalErrors.inspector.length > 0) {
++          markdown.push('### Inspector Issues');
++          markdown.push('');
++          criticalErrors.inspector.slice(0, 5).forEach(issue => {
++            markdown.push(`- **${issue.title}** (${issue.severity})`);
++            if (issue.description) markdown.push(`  - ${issue.description}`);
++          });
++          markdown.push('');
++        }
++      } else {
++        markdown.push('## ✅ No Critical Errors Found');
++        markdown.push('');
++        markdown.push('Great! No console errors, network failures, or inspector issues detected.');
++        markdown.push('');
++      }
++    }
++
++    // Long Tasks
++    const longTasks = this.getLongTasks();
++    if (longTasks && longTasks.count > 0) {
++      markdown.push('## ⏱️ Long Tasks Analysis');
++      markdown.push('');
++      markdown.push(`- **Total Long Tasks:** ${longTasks.count}`);
++      markdown.push(`- **Total Duration:** ${Math.round(longTasks.totalDuration)}ms`);
++      markdown.push(`- **Longest Task:** ${Math.round(longTasks.longestTask)}ms`);
++      markdown.push('');
++      markdown.push('Long tasks (>50ms) can cause responsiveness issues.');
++      markdown.push('');
++    }
++
++    // Top Optimization Opportunities
++    const optimizationOpportunities = this.getOptimizationOpportunities();
++    if (optimizationOpportunities && optimizationOpportunities.length > 0) {
++      markdown.push('## 🎯 Top Optimization Opportunities');
++      markdown.push('');
++      markdown.push('| Rank | Audit | Potential Savings |');
++      markdown.push('|------|-------|-------------------|');
++
++      optimizationOpportunities.slice(0, 10).forEach((opp, index) => {
++        const savings = opp.savingsMs > 0 ? `${opp.savingsMs}ms` :
++                       opp.savingsBytes > 0 ? `${Math.round(opp.savingsBytes/1024)}KB` : 'N/A';
++        markdown.push(`| ${index + 1} | ${opp.title} | ${savings} |`);
++      });
++      markdown.push('');
++
++      // Detailed recommendations for top opportunities
++      optimizationOpportunities.slice(0, 3).forEach((opp, index) => {
++        markdown.push(`### ${index + 1}. ${opp.title}`);
++        markdown.push('');
++        if (opp.description) {
++          markdown.push(opp.description);
++          markdown.push('');
++        }
++        if (opp.displayValue) {
++          markdown.push(`**Impact:** ${opp.displayValue}`);
++          markdown.push('');
++        }
++      });
++    }
++
++    // Overall Scores
++    if (this.report.categories) {
++      markdown.push('## 📈 Overall Scores');
++      markdown.push('');
++      markdown.push('| Category | Score | Status |');
++      markdown.push('|----------|-------|--------|');
++
++      Object.values(this.report.categories).forEach(category => {
++        const score = Math.round(category.score * 100);
++        const status = score >= 90 ? '🟢 Excellent' :
++                      score >= 75 ? '🟢 Good' :
++                      score >= 50 ? '🟡 Needs Work' : '🔴 Poor';
++        markdown.push(`| ${category.title} | ${score}/100 | ${status} |`);
++      });
++      markdown.push('');
++    }
++
++    // Recommendations
++    markdown.push('## 💡 Recommendations');
++    markdown.push('');
++
++    const webVitals = this.getCoreWebVitals();
++    const errors = this.getCriticalErrors();
++    const opportunities = this.getOptimizationOpportunities();
++
++    if (errors && (errors.console.length + errors.network.length + errors.inspector.length) > 0) {
++      markdown.push('### 🔴 Priority 1: Fix Critical Errors');
++      markdown.push('Address all console errors, network failures, and inspector issues before optimizing performance.');
++      markdown.push('');
++    }
++
++    if (webVitals) {
++      const poorMetrics = Object.values(webVitals).filter(m => m.status === 'poor');
++      if (poorMetrics.length > 0) {
++        markdown.push('### 🟡 Priority 2: Improve Core Web Vitals');
++        poorMetrics.forEach(metric => {
++          const name = Object.keys(webVitals).find(key => webVitals[key] === metric);
++          markdown.push(`- Optimize **${name}** (currently ${metric.value}${metric.unit})`);
++        });
++        markdown.push('');
++      }
++    }
++
++    if (opportunities && opportunities.length > 0) {
++      markdown.push('### 🟢 Priority 3: Apply Performance Optimizations');
++      markdown.push('Focus on high-impact optimizations with the largest potential savings:');
++      opportunities.slice(0, 3).forEach((opp, index) => {
++        const savings = opp.savingsMs > 0 ? `${opp.savingsMs}ms` :
++                       opp.savingsBytes > 0 ? `${Math.round(opp.savingsBytes/1024)}KB` : '';
++        markdown.push(`${index + 1}. ${opp.title} (${savings} savings)`);
++      });
++      markdown.push('');
++    }
++
++    markdown.push('---');
++    markdown.push('');
++    markdown.push('*Report generated by Lighthouse Parser*');
++
++    return markdown.join('\n');
++  }
+ }
+ 
+ // CLI интерфейс
+@@ -350,14 +552,47 @@ if (require.main === module) {
+   const args = process.argv.slice(2);
+ 
+   if (args.length === 0) {
+-    console.log('Использование: node lighthouse-parser.js <report.json>');
+-    console.log('Пример: node lighthouse-parser.js localhost-final-report.json');
++    console.log('Использование: node lighthouse-parser.js <report.json> [--markdown] [--output <file>]');
++    console.log('Примеры:');
++    console.log('  node lighthouse-parser.js report.json              # Консольный вывод');
++    console.log('  node lighthouse-parser.js report.json --markdown   # Markdown в консоль');
++    console.log('  node lighthouse-parser.js report.json --markdown --output report.md  # Markdown в файл');
+     process.exit(1);
+   }
+ 
+   const reportPath = args[0];
+   const parser = new LighthouseParser(reportPath);
+-  parser.analyze();
++
++  // Parse arguments
++  const markdownFlag = args.includes('--markdown');
++  const outputIndex = args.indexOf('--output');
++  const outputPath = outputIndex !== -1 && args[outputIndex + 1] ? args[outputIndex + 1] : null;
++
++  if (markdownFlag) {
++    // Generate Markdown report
++    const markdownReport = parser.generateMarkdownReport();
++
++    if (outputPath) {
++      // Write to file
++      const fs = require('fs');
++      const path = require('path');
++
++      // Ensure directory exists
++      const dir = path.dirname(outputPath);
++      if (dir !== '.' && !fs.existsSync(dir)) {
++        fs.mkdirSync(dir, { recursive: true });
++      }
++
++      fs.writeFileSync(outputPath, markdownReport, 'utf8');
++      console.log(`✅ Markdown отчет сохранен в: ${outputPath}`);
++    } else {
++      // Output to console
++      console.log(markdownReport);
++    }
++  } else {
++    // Default console analysis
++    parser.analyze();
++  }
+ }
+ 
+ module.exports = LighthouseParser;
+-- 
+2.50.1 (Apple Git-155)
+

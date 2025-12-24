@@ -1,0 +1,61 @@
+{
+  "name": "zeusus-lighthouse-toolkit",
+  "version": "1.0.0",
+  "description": "Complete Lighthouse Analysis Toolkit with advanced parsing and reporting",
+  "main": "lighthouse-parser.cjs",
+  "bin": {
+    "zeusus": "./lighthouse-parser.cjs",
+    "lighthouse-parser": "./lighthouse-parser.cjs"
+  },
+  "scripts": {
+    "start": "node lighthouse-parser.cjs",
+    "test": "node test.sh",
+    "demo": "node lighthouse-parser.cjs --help",
+    "markdown": "node lighthouse-parser.cjs report.json --markdown",
+    "json": "node lighthouse-parser.cjs report.json --json",
+    "performance": "node lighthouse-parser.cjs report.json --category performance",
+    "accessibility": "node lighthouse-parser.cjs report.json --category accessibility",
+    "seo": "node lighthouse-parser.cjs report.json --category seo",
+    "best-practices": "node lighthouse-parser.cjs report.json --category best-practices",
+    "pwa": "node lighthouse-parser.cjs report.json --category pwa",
+    "all-audits": "node lighthouse-parser.cjs report.json --all-audits"
+  },
+  "keywords": [
+    "lighthouse",
+    "performance",
+    "accessibility",
+    "seo",
+    "pwa",
+    "analysis",
+    "toolkit",
+    "parser",
+    "audits",
+    "reporting",
+    "ci-cd",
+    "automation"
+  ],
+  "author": "Bivex Team <support@b-b.top>",
+  "license": "MIT",
+  "homepage": "https://github.com/bivex/zeusus",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/bivex/zeusus.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bivex/zeusus/issues"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {},
+  "peerDependencies": {
+    "lighthouse": ">=9.0.0"
+  },
+  "files": [
+    "lighthouse-parser.cjs",
+    "lighthouse-parser.js",
+    "*.patch",
+    "*.md",
+    "!node_modules"
+  ]
+}

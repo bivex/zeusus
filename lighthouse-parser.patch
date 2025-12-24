@@ -1,0 +1,389 @@
+From 35f144e7aa1ceeb5049847a67cb71fd9b2ce5bc1 Mon Sep 17 00:00:00 2001
+From: bivex <209128140+bivex@users.noreply.github.com>
+Date: Wed, 24 Dec 2025 06:03:27 +0200
+Subject: [PATCH] feat: Add Lighthouse JSON parser with priority-based analysis
+
+- Parse Core Web Vitals (LCP, FCP, CLS, TBT)
+- Extract critical errors (console, network, inspector)
+- Find optimization opportunities with savings
+- Analyze DevTools logs for runtime errors
+- Analyze trace data for long tasks
+- CLI interface for easy usage
+- Priority-based reporting (errors > metrics > optimizations)
+---
+ lighthouse-parser.cjs | 363 ++++++++++++++++++++++++++++++++++++++++++
+ 1 file changed, 363 insertions(+)
+ create mode 100644 lighthouse-parser.cjs
+
+diff --git a/lighthouse-parser.cjs b/lighthouse-parser.cjs
+new file mode 100644
+index 000000000..a1a5107fb
+--- /dev/null
++++ b/lighthouse-parser.cjs
+@@ -0,0 +1,363 @@
++#!/usr/bin/env node
++
++/**
++ * Lighthouse JSON Parser - извлекает самые важные данные
++ * Использует приоритеты анализа от пользователя
++ */
++
++const fs = require('fs');
++const path = require('path');
++
++class LighthouseParser {
++  constructor(reportPath) {
++    this.reportPath = reportPath;
++    this.report = null;
++    this.devtoolsLog = null;
++    this.traceData = null;
++  }
++
++  loadReport() {
++    try {
++      this.report = JSON.parse(fs.readFileSync(this.reportPath, 'utf8'));
++      return true;
++    } catch (error) {
++      console.error('❌ Ошибка загрузки отчета:', error.message);
++      return false;
++    }
++  }
++
++  loadDevToolsLog() {
++    const logPath = this.reportPath.replace('.json', '-0.devtoolslog.json');
++    if (fs.existsSync(logPath)) {
++      try {
++        // DevTools log - массив JSON объектов
++        const logContent = fs.readFileSync(logPath, 'utf8');
++        this.devtoolsLog = logContent.trim().split('\n').map(line => {
++          try {
++            return JSON.parse(line);
++          } catch {
++            return null;
++          }
++        }).filter(Boolean);
++        return true;
++      } catch (error) {
++        console.error('❌ Ошибка загрузки DevTools log:', error.message);
++      }
++    }
++    return false;
++  }
++
++  loadTraceData() {
++    const tracePath = this.reportPath.replace('.json', '-0.trace.json');
++    if (fs.existsSync(tracePath)) {
++      try {
++        this.traceData = JSON.parse(fs.readFileSync(tracePath, 'utf8'));
++        return true;
++      } catch (error) {
++        console.error('❌ Ошибка загрузки trace данных:', error.message);
++      }
++    }
++    return false;
++  }
++
++  // Priority 1: Core Web Vitals
++  getCoreWebVitals() {
++    if (!this.report?.audits) return null;
++
++    return {
++      'Largest Contentful Paint (LCP)': {
++        value: this.report.audits['largest-contentful-paint']?.numericValue || 0,
++        unit: 'ms',
++        score: this.report.audits['largest-contentful-paint']?.score || 0,
++        status: this.getMetricStatus('largest-contentful-paint')
++      },
++      'First Contentful Paint (FCP)': {
++        value: this.report.audits['first-contentful-paint']?.numericValue || 0,
++        unit: 'ms',
++        score: this.report.audits['first-contentful-paint']?.score || 0,
++        status: this.getMetricStatus('first-contentful-paint')
++      },
++      'Cumulative Layout Shift (CLS)': {
++        value: this.report.audits['cumulative-layout-shift']?.numericValue || 0,
++        unit: 'score',
++        score: this.report.audits['cumulative-layout-shift']?.score || 0,
++        status: this.getMetricStatus('cumulative-layout-shift')
++      },
++      'Total Blocking Time (TBT)': {
++        value: this.report.audits['total-blocking-time']?.numericValue || 0,
++        unit: 'ms',
++        score: this.report.audits['total-blocking-time']?.score || 0,
++        status: this.getMetricStatus('total-blocking-time')
++      }
++    };
++  }
++
++  getMetricStatus(auditId) {
++    const audit = this.report.audits[auditId];
++    if (!audit) return 'unknown';
++
++    if (audit.score === 1) return 'good';
++    if (audit.score === 0) return 'poor';
++    if (audit.score > 0 && audit.score < 1) return 'needs-improvement';
++    return 'unknown';
++  }
++
++  // Priority 2: Критические ошибки
++  getCriticalErrors() {
++    if (!this.report?.audits) return null;
++
++    const errors = {
++      console: [],
++      network: [],
++      inspector: []
++    };
++
++    // Console errors
++    const consoleErrors = this.report.audits['errors-in-console'];
++    if (consoleErrors?.details?.items) {
++      errors.console = consoleErrors.details.items.map(item => ({
++        description: item.description,
++        source: item.source,
++        url: item.url,
++        line: item.lineNumber,
++        column: item.columnNumber
++      }));
++    }
++
++    // Network errors
++    const networkRequests = this.report.audits['network-requests'];
++    if (networkRequests?.details?.items) {
++      errors.network = networkRequests.details.items
++        .filter(req => req.statusCode && req.statusCode >= 400)
++        .map(req => ({
++          url: req.url,
++          status: req.statusCode,
++          resourceType: req.resourceType,
++          transferSize: req.transferSize
++        }));
++    }
++
++    // Inspector issues
++    const inspectorIssues = this.report.audits['inspector-issues'];
++    if (inspectorIssues?.details?.items) {
++      errors.inspector = inspectorIssues.details.items.map(item => ({
++        code: item.code,
++        title: item.title,
++        description: item.description,
++        severity: item.severity
++      }));
++    }
++
++    return errors;
++  }
++
++  // Priority 3: Возможности оптимизации
++  getOptimizationOpportunities() {
++    if (!this.report?.audits) return null;
++
++    const opportunities = [];
++
++    // Проходим по всем аудитам и ищем те, у которых есть overallSavingsMs или overallSavingsBytes
++    Object.entries(this.report.audits).forEach(([key, audit]) => {
++      if (audit.details?.overallSavingsMs > 0 || audit.details?.overallSavingsBytes > 0) {
++        opportunities.push({
++          audit: key,
++          title: audit.title,
++          score: audit.score,
++          savingsMs: audit.details.overallSavingsMs || 0,
++          savingsBytes: audit.details.overallSavingsBytes || 0,
++          displayValue: audit.displayValue,
++          description: audit.description
++        });
++      }
++    });
++
++    // Сортируем по потенциалу экономии (ms + bytes/1000 для сравнения)
++    return opportunities.sort((a, b) => {
++      const aSavings = a.savingsMs + (a.savingsBytes / 1000);
++      const bSavings = b.savingsMs + (b.savingsBytes / 1000);
++      return bSavings - aSavings;
++    });
++  }
++
++  // Анализ DevTools Log для ошибок
++  getDevToolsErrors() {
++    if (!this.devtoolsLog) return null;
++
++    const errors = {
++      console: [],
++      exceptions: [],
++      networkFails: []
++    };
++
++    this.devtoolsLog.forEach(entry => {
++      // Console API calls
++      if (entry.method === 'Runtime.consoleAPICalled') {
++        if (entry.params.type === 'error') {
++          errors.console.push({
++            message: entry.params.args?.[0]?.value || 'Unknown error',
++            timestamp: entry.params.timestamp,
++            stackTrace: entry.params.stackTrace
++          });
++        }
++      }
++
++      // JavaScript exceptions
++      if (entry.method === 'Runtime.exceptionThrown') {
++        errors.exceptions.push({
++          exception: entry.params.exceptionDetails,
++          timestamp: entry.params.timestamp
++        });
++      }
++
++      // Network failures
++      if (entry.method === 'Network.loadingFailed') {
++        errors.networkFails.push({
++          url: entry.params.request?.url,
++          errorText: entry.params.errorText,
++          timestamp: entry.params.timestamp
++        });
++      }
++    });
++
++    return errors;
++  }
++
++  // Анализ Trace для Long Tasks
++  getLongTasks() {
++    if (!this.traceData?.traceEvents) return null;
++
++    const longTasks = this.traceData.traceEvents
++      .filter(event =>
++        event.cat?.includes('devtools.timeline') &&
++        event.name === 'RunTask' &&
++        event.dur > 50000 // > 50ms
++      )
++      .map(event => ({
++        duration: event.dur / 1000, // в ms
++        startTime: event.ts / 1000, // в ms
++        thread: event.tid
++      }))
++      .sort((a, b) => b.duration - a.duration);
++
++    return {
++      count: longTasks.length,
++      totalDuration: longTasks.reduce((sum, task) => sum + task.duration, 0),
++      longestTask: longTasks[0]?.duration || 0,
++      tasks: longTasks.slice(0, 5) // top 5
++    };
++  }
++
++  // Основной метод анализа
++  analyze() {
++    console.log('🔍 Lighthouse Parser - анализ отчета\n');
++
++    if (!this.loadReport()) {
++      return;
++    }
++
++    // Загружаем дополнительные данные
++    this.loadDevToolsLog();
++    this.loadTraceData();
++
++    // 1. Core Web Vitals
++    const metrics = this.getCoreWebVitals();
++    if (metrics) {
++      console.log('📊 Core Web Vitals:');
++      Object.entries(metrics).forEach(([name, data]) => {
++        const status = data.status === 'good' ? '🟢' : data.status === 'poor' ? '🔴' : '🟡';
++        console.log(`  ${status} ${name}: ${data.value}${data.unit} (score: ${data.score})`);
++      });
++      console.log();
++    }
++
++    // 2. Критические ошибки
++    const errors = this.getCriticalErrors();
++    if (errors) {
++      const totalErrors = errors.console.length + errors.network.length + errors.inspector.length;
++      if (totalErrors > 0) {
++        console.log('🚨 Критические ошибки:');
++        if (errors.console.length > 0) {
++          console.log(`  🔴 Console errors: ${errors.console.length}`);
++          errors.console.slice(0, 3).forEach(err => {
++            console.log(`    - ${err.description}`);
++          });
++        }
++        if (errors.network.length > 0) {
++          console.log(`  🔴 Network errors: ${errors.network.length}`);
++          errors.network.slice(0, 3).forEach(err => {
++            console.log(`    - ${err.status} ${err.url}`);
++          });
++        }
++        if (errors.inspector.length > 0) {
++          console.log(`  🔴 Inspector issues: ${errors.inspector.length}`);
++          errors.inspector.slice(0, 3).forEach(issue => {
++            console.log(`    - ${issue.title}`);
++          });
++        }
++        console.log();
++      } else {
++        console.log('✅ Критических ошибок не найдено\n');
++      }
++    }
++
++    // 3. DevTools errors (дополнительно)
++    const devToolsErrors = this.getDevToolsErrors();
++    if (devToolsErrors && (devToolsErrors.console.length > 0 || devToolsErrors.exceptions.length > 0)) {
++      console.log('🛠️ DevTools Errors:');
++      console.log(`  Console: ${devToolsErrors.console.length}, Exceptions: ${devToolsErrors.exceptions.length}`);
++      console.log();
++    }
++
++    // 4. Long Tasks
++    const longTasks = this.getLongTasks();
++    if (longTasks && longTasks.count > 0) {
++      console.log('⏱️ Long Tasks:');
++      console.log(`  Count: ${longTasks.count}, Total duration: ${Math.round(longTasks.totalDuration)}ms`);
++      console.log(`  Longest: ${Math.round(longTasks.longestTask)}ms`);
++      console.log();
++    }
++
++    // 5. Top optimization opportunities
++    const opportunities = this.getOptimizationOpportunities();
++    if (opportunities && opportunities.length > 0) {
++      console.log('🎯 Top оптимизации:');
++      opportunities.slice(0, 5).forEach((opp, index) => {
++        const savings = opp.savingsMs > 0 ? `${opp.savingsMs}ms` :
++                       opp.savingsBytes > 0 ? `${Math.round(opp.savingsBytes/1024)}KB` : '';
++        console.log(`  ${index + 1}. ${opp.title} - экономия: ${savings}`);
++      });
++      console.log();
++    }
++
++    // 6. Общий скор
++    if (this.report.categories) {
++      console.log('📈 Общие оценки:');
++      Object.values(this.report.categories).forEach(category => {
++        const score = Math.round(category.score * 100);
++        const status = score >= 90 ? '🟢' : score >= 50 ? '🟡' : '🔴';
++        console.log(`  ${status} ${category.title}: ${score}/100`);
++      });
++      console.log();
++    }
++
++    console.log('✅ Анализ завершен!');
++  }
++}
++
++// CLI интерфейс
++if (require.main === module) {
++  const args = process.argv.slice(2);
++
++  if (args.length === 0) {
++    console.log('Использование: node lighthouse-parser.js <report.json>');
++    console.log('Пример: node lighthouse-parser.js localhost-final-report.json');
++    process.exit(1);
++  }
++
++  const reportPath = args[0];
++  const parser = new LighthouseParser(reportPath);
++  parser.analyze();
++}
++
++module.exports = LighthouseParser;
+-- 
+2.50.1 (Apple Git-155)
+
